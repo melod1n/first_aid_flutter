@@ -132,10 +132,10 @@ class MedicationListPage extends StatefulWidget {
   const MedicationListPage({super.key});
 
   @override
-  _MedicationListPageState createState() => _MedicationListPageState();
+  MedicationListPageState createState() => MedicationListPageState();
 }
 
-class _MedicationListPageState extends State<MedicationListPage> {
+class MedicationListPageState extends State<MedicationListPage> {
   late Database _database;
   List<Medication> _medications = [];
 
