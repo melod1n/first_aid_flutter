@@ -155,8 +155,8 @@ class MedicationListPage extends StatefulWidget {
 }
 
 class MedicationListPageState extends State<MedicationListPage> {
-  late Database _database;
-  List<Medication> _medications = [];
+  Database? _database;
+  final List<Medication> _medications = [];
   final List<int> _selectedMedicationsIds = [];
 
   @override
@@ -297,13 +297,15 @@ class MedicationListPageState extends State<MedicationListPage> {
   }
 
   Future<void> _loadMedications() async {
-    final dbMedications = await _database.query(medicationTableName);
+    final dbMedications = await _database?.query(medicationTableName) ?? [];
 
     List<Medication> medications =
         dbMedications.map((element) => Medication.fromMap(element)).toList();
 
+    _medications.clear();
+
     setState(() {
-      _medications = medications;
+      _medications.addAll(medications);
     });
   }
 
@@ -330,7 +332,7 @@ class MedicationListPageState extends State<MedicationListPage> {
 
   Future<void> _addMedication(Medication medication,
       {bool withRefresh = true}) async {
-    await _database.insert(
+    await _database?.insert(
         medicationTableName, medication.toMap(withId: medication.id != -1),
         conflictAlgorithm: ConflictAlgorithm.replace);
 
@@ -341,7 +343,9 @@ class MedicationListPageState extends State<MedicationListPage> {
 
   Future<void> _addMedications(List<Medication> medications,
       {bool withRefresh = true}) async {
-    final batch = _database.batch();
+    if (_database == null) return;
+
+    final batch = _database!.batch();
     for (var medication in medications) {
       batch.insert(medicationTableName, medication.toMap());
     }
@@ -355,7 +359,7 @@ class MedicationListPageState extends State<MedicationListPage> {
 
   Future<void> _deleteMedication(int id, {bool withRefresh = true}) async {
     await _database
-        .delete(medicationTableName, where: 'id = ?', whereArgs: [id]);
+        ?.delete(medicationTableName, where: 'id = ?', whereArgs: [id]);
 
     if (withRefresh) {
       _loadMedications();
@@ -364,7 +368,9 @@ class MedicationListPageState extends State<MedicationListPage> {
 
   Future<void> _deleteMedications(List<int> ids,
       {bool withRefresh = true}) async {
-    final batch = _database.batch();
+    if (_database == null) return;
+
+    final batch = _database!.batch();
     for (var id in ids) {
       batch.delete(medicationTableName, where: 'id = ?', whereArgs: [id]);
     }
