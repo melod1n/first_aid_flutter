@@ -2,11 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:random_date/random_date.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart';
 
 const medicationTableName = "medications";
+const sqlCreateTable =
+    'CREATE TABLE $medicationTableName(id INTEGER PRIMARY KEY, title TEXT, productionDate INTEGER, expirationDate INTEGER, activeSubstanceId INTEGER, barcodeNumbers TEXT)';
 
 void main() {
   runApp(const MedicationManagerApp());
@@ -114,17 +117,19 @@ class Medication {
   }
 
   factory Medication.create(
-      {required String title,
+      {int id = -1,
+      required String title,
       required int productionDate,
       required int expirationDate,
-      required int activeSubstanceId}) {
+      required int activeSubstanceId,
+      String barcodeNumbers = ''}) {
     return Medication(
-        id: -1,
+        id: id,
         title: title,
         productionDate: productionDate,
         expirationDate: expirationDate,
         activeSubstanceId: activeSubstanceId,
-        barcodeNumbers: "");
+        barcodeNumbers: barcodeNumbers);
   }
 }
 
@@ -138,6 +143,7 @@ class MedicationListPage extends StatefulWidget {
 class MedicationListPageState extends State<MedicationListPage> {
   late Database _database;
   List<Medication> _medications = [];
+  final List<int> _selectedMedicationsIds = [];
 
   @override
   void initState() {
@@ -145,20 +151,116 @@ class MedicationListPageState extends State<MedicationListPage> {
     _initDatabase();
   }
 
+  @override
+  Widget build(BuildContext context) {
+    final scaffold = Scaffold(
+      appBar: AppBar(
+        title: Text(
+            'Medication Manager ${_selectedMedicationsIds.isNotEmpty ? '(${_selectedMedicationsIds.length})' : ''}'),
+        actions: _selectedMedicationsIds.isEmpty
+            ? []
+            : [
+                MenuItemButton(
+                    child: const Icon(Icons.delete_rounded),
+                    onPressed: () {
+                      if (_selectedMedicationsIds.length == 1) {
+                        final selectedMedicationIndex = _medications.indexWhere(
+                            (element) =>
+                                element.id == _selectedMedicationsIds.first);
+                        final selectedMedication =
+                            _medications[selectedMedicationIndex];
+
+                        _showDeleteSnackbar(context, selectedMedication.id,
+                            selectedMedication.title);
+                      } else {
+                        _showDeleteAlert(context, _selectedMedicationsIds);
+                      }
+                    })
+              ],
+      ),
+      body: ListView.builder(
+        itemCount: _medications.length,
+        itemBuilder: (context, index) {
+          final medication = _medications[index];
+          final formattedDate = medication.productionDate.toSimpleDate();
+
+          return Container(
+            color: (_selectedMedicationsIds.contains(medication.id)
+                ? Colors.deepPurple.withOpacity(0.5)
+                : Colors.transparent),
+            child: ListTile(
+              leading: Text('#${medication.id}'),
+              title: Text(medication.title),
+              subtitle: Text('Production date: $formattedDate'),
+              onTap: () {
+                if (_selectedMedicationsIds.isNotEmpty) {
+                  // selection mode
+                  setState(() {
+                    if (_selectedMedicationsIds.contains(medication.id)) {
+                      _selectedMedicationsIds
+                          .removeWhere((element) => element == medication.id);
+                    } else {
+                      _selectedMedicationsIds.add(medication.id);
+                    }
+                  });
+                } else {
+                  // open info mode
+                  _showAddMedicationDialog(context,
+                      id: medication.id,
+                      inputText: medication.title,
+                      productionDate: medication.productionDate,
+                      expirationDate: medication.expirationDate);
+                }
+              },
+              onLongPress: () {
+                if (_selectedMedicationsIds.isNotEmpty) {
+                  // selection mode
+                  setState(() {
+                    if (_selectedMedicationsIds.contains(medication.id)) {
+                      _selectedMedicationsIds
+                          .removeWhere((element) => element == medication.id);
+                    } else {
+                      _selectedMedicationsIds.add(medication.id);
+                    }
+                  });
+                } else {
+                  // enter selection mode
+                  setState(() {
+                    _selectedMedicationsIds.add(medication.id);
+                  });
+                }
+              },
+            ),
+          );
+        },
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => _showAddMedicationDialog(context),
+        child: const Icon(Icons.add),
+      ),
+    );
+
+    return scaffold;
+  }
+
   Future<void> _initDatabase() async {
     final databasePath = await getApplicationDocumentsDirectory();
     final path = join(databasePath.path, 'data.db');
+
+    var fillFakeData = false;
+
     _database = await openDatabase(
       path,
       version: 1,
       onCreate: (Database db, int version) {
-        db.execute(
-          'CREATE TABLE $medicationTableName(id INTEGER PRIMARY KEY, title TEXT, productionDate INTEGER, expirationDate INTEGER, activeSubstanceId INTEGER, barcodeNumbers TEXT)',
-        );
-
-        _fillWithFakeData();
+        fillFakeData = true;
+        db.execute(sqlCreateTable);
       },
     );
+
+    if (fillFakeData) {
+      await _fillWithFakeData();
+    }
     _loadMedications();
   }
 
@@ -174,65 +276,107 @@ class MedicationListPageState extends State<MedicationListPage> {
   }
 
   Future<void> _fillWithFakeData() async {
-    final List<Medication> medications = [];
+    final currentYear = DateTime.now().year;
+    final productionDateRandomizer = RandomDate.withRange(1990, currentYear);
+    final expirationDateRandomizer =
+        RandomDate.withRange(currentYear, currentYear * 2);
+
+    final List<Medication> medications = List.generate(
+        30,
+        (index) => Medication(
+            id: index,
+            title: 'Test medication #${index + 1}',
+            productionDate:
+                productionDateRandomizer.random().millisecondsSinceEpoch,
+            expirationDate:
+                expirationDateRandomizer.random().millisecondsSinceEpoch,
+            activeSubstanceId: index,
+            barcodeNumbers: ''));
+
+    _addMedications(medications, withRefresh: false);
   }
 
-  Future<void> _addMedication(Medication medication) async {
-    await _database.insert(medicationTableName, medication.toMap());
-    _loadMedications();
+  Future<void> _addMedication(Medication medication,
+      {bool withRefresh = true}) async {
+    await _database.insert(
+        medicationTableName, medication.toMap(withId: medication.id != -1),
+        conflictAlgorithm: ConflictAlgorithm.replace);
+
+    if (withRefresh) {
+      _loadMedications();
+    }
   }
 
-  Future<void> _deleteMedication(int id) async {
+  Future<void> _addMedications(List<Medication> medications,
+      {bool withRefresh = true}) async {
+    final batch = _database.batch();
+    for (var medication in medications) {
+      batch.insert(medicationTableName, medication.toMap());
+    }
+
+    await batch.commit(noResult: true);
+
+    if (withRefresh) {
+      _loadMedications();
+    }
+  }
+
+  Future<void> _deleteMedication(int id, {bool withRefresh = true}) async {
     await _database
         .delete(medicationTableName, where: 'id = ?', whereArgs: [id]);
-    _loadMedications();
+
+    if (withRefresh) {
+      _loadMedications();
+    }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Medication Manager'),
-      ),
-      body: ListView.builder(
-        itemCount: _medications.length,
-        itemBuilder: (context, index) {
-          final medication = _medications[index];
-          final formattedDate = medication.productionDate.toSimpleDate();
+  Future<void> _deleteMedications(List<int> ids,
+      {bool withRefresh = true}) async {
+    final batch = _database.batch();
+    for (var id in ids) {
+      batch.delete(medicationTableName, where: 'id = ?', whereArgs: [id]);
+    }
 
-          return ListTile(
-            leading: Text('#${medication.id}'),
-            title: Text(medication.title),
-            subtitle: Text('Production date: $formattedDate'),
-            trailing: IconButton(
-              icon: const Icon(Icons.delete),
-              onPressed: () =>
-                  _showDeleteSnackbar(context, medication.title, medication.id),
+    await batch.commit(noResult: true);
+
+    if (withRefresh) {
+      _loadMedications();
+    }
+  }
+
+  Future<void> _showDeleteAlert(BuildContext context, List<int> ids) async {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Confirmation'),
+          content:
+              const Text('Are you sure you want to delete this medications?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('No'),
             ),
-            onLongPress: () => {
-              ScaffoldMessenger.of(context).showMaterialBanner(MaterialBanner(
-                  content: const Text('Material Banner'),
-                  actions: [
-                    TextButton(
-                        onPressed: () => {
-                              ScaffoldMessenger.of(context)
-                                  .clearMaterialBanners()
-                            },
-                        child: const Text('Dismiss')),
-                  ]))
-            },
-          );
-        },
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _showAddMedicationDialog(context),
-        child: const Icon(Icons.add),
-      ),
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(context);
+
+                await _deleteMedications(ids);
+
+                setState(() {
+                  _selectedMedicationsIds.clear();
+                });
+              },
+              child: const Text('Yes'),
+            ),
+          ],
+        );
+      },
     );
   }
 
   Future<void> _showDeleteSnackbar(
-      BuildContext context, String title, int id) async {
+      BuildContext context, int id, String title) async {
     const duration = Duration(seconds: 3);
 
     bool isUndone = false;
@@ -246,28 +390,29 @@ class MedicationListPageState extends State<MedicationListPage> {
 
     final deletedMedication = _medications[deletedMedicationIndex];
 
-    _medications.removeAt(deletedMedicationIndex);
     setState(() {
-      _medications = _medications.toList();
+      _selectedMedicationsIds.clear();
+      _medications.removeAt(deletedMedicationIndex);
     });
 
-    Timer(
-        duration,
-        () => {
-              if (!isUndone) {_deleteMedication(id)}
-            });
+    Timer(duration, () {
+      if (!isUndone) {
+        _deleteMedication(id);
+      }
+    });
 
     final snackbar = SnackBar(
       content: Text('Medication "$title" deleted'),
       action: SnackBarAction(
           label: 'Undo',
-          onPressed: () => {
-                isUndone = true,
-                _medications.insert(deletedMedicationIndex, deletedMedication),
-                setState(() {
-                  _medications = _medications.toList();
-                })
-              }),
+          onPressed: () {
+            isUndone = true;
+
+            setState(() {
+              _selectedMedicationsIds.add(deletedMedication.id);
+              _medications.insert(deletedMedicationIndex, deletedMedication);
+            });
+          }),
       duration: duration,
     );
 
@@ -275,7 +420,10 @@ class MedicationListPageState extends State<MedicationListPage> {
   }
 
   Future<void> _showAddMedicationDialog(BuildContext context,
-      {String? inputText, int? productionDate, int? expirationDate}) async {
+      {int? id,
+      String? inputText,
+      int? productionDate,
+      int? expirationDate}) async {
     TextEditingController inputController = TextEditingController();
     inputController.text = inputText ?? '';
 
@@ -298,7 +446,10 @@ class MedicationListPageState extends State<MedicationListPage> {
             onPressed: () => {
                   showDatePicker(
                           context: context,
-                          initialDate: DateTime.now(),
+                          initialDate: productionDate == null
+                              ? DateTime.now()
+                              : DateTime.fromMillisecondsSinceEpoch(
+                                  productionDate),
                           firstDate: DateTime.fromMillisecondsSinceEpoch(0),
                           lastDate: DateTime.now(),
                           helpText: 'Pick production date')
@@ -308,6 +459,7 @@ class MedicationListPageState extends State<MedicationListPage> {
                                     pickedProductionDate,
                             Navigator.pop(context),
                             _showAddMedicationDialog(context,
+                                id: id,
                                 inputText: inputController.text,
                                 productionDate: pickedProductionDate,
                                 expirationDate: pickedExpirationDate)
@@ -320,7 +472,10 @@ class MedicationListPageState extends State<MedicationListPage> {
             onPressed: () => {
                   showDatePicker(
                           context: context,
-                          initialDate: DateTime.now(),
+                          initialDate: expirationDate == null
+                              ? DateTime.now()
+                              : DateTime.fromMillisecondsSinceEpoch(
+                                  expirationDate),
                           firstDate: DateTime.now(),
                           lastDate: DateTime(2500),
                           helpText: 'Pick expiration date')
@@ -330,6 +485,7 @@ class MedicationListPageState extends State<MedicationListPage> {
                                     pickedExpirationDate,
                             Navigator.pop(context),
                             _showAddMedicationDialog(context,
+                                id: id,
                                 inputText: inputController.text,
                                 productionDate: pickedProductionDate,
                                 expirationDate: pickedExpirationDate)
@@ -342,7 +498,7 @@ class MedicationListPageState extends State<MedicationListPage> {
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('Add Medication'),
+          title: Text(id == null ? 'Add Medication' : 'Edit Medication'),
           content: verticalColumn,
           actions: [
             TextButton(
@@ -371,6 +527,7 @@ class MedicationListPageState extends State<MedicationListPage> {
                 }
 
                 final newMedication = Medication.create(
+                    id: id ?? -1,
                     title: finalTitle,
                     productionDate: finalProductionDate,
                     expirationDate: finalExpirationDate,
@@ -378,7 +535,7 @@ class MedicationListPageState extends State<MedicationListPage> {
 
                 _addMedication(newMedication);
               },
-              child: const Text('Add'),
+              child: Text(id == null ? 'Add' : 'Edit'),
             ),
           ],
         );
