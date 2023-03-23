@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:adaptive_theme/adaptive_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:random_date/random_date.dart';
@@ -7,24 +8,37 @@ import 'package:sqflite/sqflite.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart';
 
+import 'package:get/get.dart';
+
+import 'app_theme.dart';
+
 const medicationTableName = "medications";
 const sqlCreateTable =
     'CREATE TABLE $medicationTableName(id INTEGER PRIMARY KEY, title TEXT, productionDate INTEGER, expirationDate INTEGER, activeSubstanceId INTEGER, barcodeNumbers TEXT)';
 
-void main() {
-  runApp(const MedicationManagerApp());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final savedThemeMode = await AdaptiveTheme.getThemeMode();
+  runApp(MedicationManagerApp(savedThemeMode: savedThemeMode));
 }
 
 class MedicationManagerApp extends StatelessWidget {
-  const MedicationManagerApp({super.key});
+  final AdaptiveThemeMode? savedThemeMode;
+
+  const MedicationManagerApp({super.key, this.savedThemeMode});
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Medication Manager',
-      theme: ThemeData(primarySwatch: Colors.deepPurple),
-      home: const MedicationListPage(),
-    );
+    return AdaptiveTheme(
+        light: Themes.light,
+        dark: Themes.dark,
+        initial: savedThemeMode ?? AdaptiveThemeMode.system,
+        builder: (theme, darkTheme) => MaterialApp(
+              title: 'Medication Manager',
+              theme: theme,
+              darkTheme: darkTheme,
+              home: const MedicationListPage(),
+            ));
   }
 }
 
@@ -153,30 +167,48 @@ class MedicationListPageState extends State<MedicationListPage> {
 
   @override
   Widget build(BuildContext context) {
+    final List<Widget> menuItems = _selectedMedicationsIds.isEmpty
+        ? []
+        : [
+            MenuItemButton(
+                child: Icon(Icons.delete_rounded,
+                    color: context.theme.colorScheme.onPrimary),
+                onPressed: () {
+                  if (_selectedMedicationsIds.length == 1) {
+                    final selectedMedicationIndex = _medications.indexWhere(
+                        (element) =>
+                            element.id == _selectedMedicationsIds.first);
+                    final selectedMedication =
+                        _medications[selectedMedicationIndex];
+
+                    _showDeleteSnackbar(context, selectedMedication.id,
+                        selectedMedication.title);
+                  } else {
+                    _showDeleteAlert(context, _selectedMedicationsIds);
+                  }
+                })
+          ];
+
+    final popupMenuButton = PopupMenuButton(itemBuilder: (context) {
+      return [
+        PopupMenuItem(
+            onTap: () {
+              AdaptiveTheme.of(context).toggleThemeMode();
+            },
+            child: const Text('Toggle theme'))
+      ];
+    });
+
+    final List<Widget> actions = [];
+    actions.addAll(menuItems);
+    actions.add(popupMenuButton);
+
     final scaffold = Scaffold(
+      backgroundColor: context.theme.colorScheme.background,
       appBar: AppBar(
         title: Text(
             'Medication Manager ${_selectedMedicationsIds.isNotEmpty ? '(${_selectedMedicationsIds.length})' : ''}'),
-        actions: _selectedMedicationsIds.isEmpty
-            ? []
-            : [
-                MenuItemButton(
-                    child: const Icon(Icons.delete_rounded),
-                    onPressed: () {
-                      if (_selectedMedicationsIds.length == 1) {
-                        final selectedMedicationIndex = _medications.indexWhere(
-                            (element) =>
-                                element.id == _selectedMedicationsIds.first);
-                        final selectedMedication =
-                            _medications[selectedMedicationIndex];
-
-                        _showDeleteSnackbar(context, selectedMedication.id,
-                            selectedMedication.title);
-                      } else {
-                        _showDeleteAlert(context, _selectedMedicationsIds);
-                      }
-                    })
-              ],
+        actions: actions,
       ),
       body: ListView.builder(
         itemCount: _medications.length,
@@ -186,7 +218,7 @@ class MedicationListPageState extends State<MedicationListPage> {
 
           return Container(
             color: (_selectedMedicationsIds.contains(medication.id)
-                ? Colors.deepPurple.withOpacity(0.5)
+                ? context.theme.colorScheme.primary.withOpacity(0.5)
                 : Colors.transparent),
             child: ListTile(
               leading: Text('#${medication.id}'),
@@ -441,7 +473,10 @@ class MedicationListPageState extends State<MedicationListPage> {
         const SizedBox(height: 20),
         Text(
             'Production date: ${pickedProductionDate?.toSimpleDate() ?? 'Not picked yet'}'),
-        MaterialButton(
+        ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                foregroundColor: context.theme.colorScheme.onSecondary,
+                backgroundColor: context.theme.colorScheme.secondary),
             child: const Text('Pick production date'),
             onPressed: () => {
                   showDatePicker(
@@ -465,9 +500,13 @@ class MedicationListPageState extends State<MedicationListPage> {
                                 expirationDate: pickedExpirationDate)
                           })
                 }),
+        const SizedBox(height: 10),
         Text(
             'Expiration date: ${pickedExpirationDate?.toSimpleDate() ?? 'Not picked yet'}'),
-        MaterialButton(
+        ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                foregroundColor: context.theme.colorScheme.onSecondary,
+                backgroundColor: context.theme.colorScheme.secondary),
             child: const Text('Pick expiration date'),
             onPressed: () => {
                   showDatePicker(
